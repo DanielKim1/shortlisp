@@ -1,69 +1,143 @@
+#include "mpc.h"
 #include <stdio.h>
 #include <stdlib.h>
-
-#include <editline/readline.h>
 #include <editline/history.h>
+#include <editline/readline.h>
 
-#include "mpc.h"
+// create enumeration of possible error types
+enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM };
+
+// create enumeration of possible lval types
+enum { LVAL_NUM, LVAL_ERR };
+
+// declare new lval struct
+typedef struct
+{
+  int type;
+  long num;
+  int err;
+} lval;
+
+// create a new number type lval
+lval lval_num(long x)
+{
+  lval v;
+  v.type = LVAL_NUM;
+  v.num = x;
+  return v;
+}
+
+// create a new error type lval
+lval lval_err(int x)
+{
+  lval v;
+  v.type = LVAL_ERR;
+  v.err = x;
+  return v;
+}
+
+// print an lval
+void lval_print(lval v)
+{
+  switch (v.type)
+  {
+    // in the case the type is a number print it
+    // then break out of the switch
+    case LVAL_NUM: printf("%li", v.num); break;
+
+    // in the case the type is an error
+    case LVAL_ERR:
+      // check what type of error it is and print it
+      if (v.err == LERR_DIV_ZERO)
+      {
+        printf("Error: Division by Zero");
+      }
+      if (v.err == LERR_BAD_OP)
+      {
+        printf("Error: Invalid Operator");
+      }
+      if (v.err == LERR_BAD_NUM)
+      {
+        printf("Error: Invalid Number");
+      }
+    break;
+  }
+}
+
+// print an lval followed by a newline
+void lval_println(lval l) { lval_print(l); putchar('\n'); }
 
 // use operator string to see which operator to perform
-long eval_op(long x, char* op, long y)
+lval eval_op(lval x, char* op, lval y)
 {
-  if (strcmp(op, "+") == 0) { return x + y; }
+  // if either value is an error return it
+  if (x.type == LVAL_ERR) { return x; }
+  if (y.type == LVAL_ERR) { return y; }
 
-  if (strcmp(op, "-") == 0) { return x - y; }
+  // otherwise do maths on the number values
+  if (strcmp(op, "+") == 0) { return lval_num(x.num + y.num); }
 
-  if (strcmp(op, "*") == 0) { return x * y; }
+  if (strcmp(op, "-") == 0) { return lval_num(x.num - y.num); }
 
-  if (strcmp(op, "/") == 0) { return x / y; }
+  if (strcmp(op, "*") == 0) { return lval_num(x.num * y.num); }
 
-  if (strcmp(op, "%") == 0) { return x % y; }
+  if (strcmp(op, "/") == 0)
+  {
+    return y.num == 0
+      ? lval_err(LERR_DIV_ZERO)
+      : lval_num(x.num / y.num);
+  }
+
+  if (strcmp(op, "%") == 0) { return lval_num(x.num % y.num); }
 
   if (strcmp(op, "^") == 0)
   {
     int result = 1;
 
-    while (y)
+    while (y.num)
     {
-      if (y&1)
+      if (y.num&1)
       {
-        result *= x;
+        result *= x.num;
       }
-      y >>=1 ;
-      x *= x;
+      y.num >>=1 ;
+      x.num *= x.num;
     }
 
-    return result;
+    return lval_num(result);
   }
 
   if (strcmp(op, "min") == 0)
   {
-    if (x < y) { return x; }
-    return y;
+    if (x.num < y.num) { return lval_num(x.num); }
+    return lval_num(y.num);
   }
 
   if (strcmp(op, "max") == 0)
   {
-    if (x > y) { return x; }
-    return y;
+    if (x.num > y.num) { return lval_num(x.num); }
+    return lval_num(y.num);
   }
 
-  return 0;
+  return lval_err(LERR_BAD_OP);
 }
 
-long eval(mpc_ast_t* t) {
+lval eval(mpc_ast_t* t) {
 
   // if tagged as number return it directly
   if (strstr(t->tag, "number"))
   {
-    return atoi(t->contents);
+    // check if there is some error in conversion
+    errno = 0;
+    long x = strtol(t->contents, NULL, 10);
+    return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
   }
 
   // the operator is always the second child
   char* op = t->children[1]->contents;
 
   // store the third child in 'x'
-  long x = eval(t->children[2]);
+  lval x = eval(t->children[2]);
 
   // iterate the remaining children and combining
   int i = 3;
@@ -79,9 +153,9 @@ long eval(mpc_ast_t* t) {
 int main(int argc, char** argv)
 {
   // create and name rules
-  mpc_parser_t* Number = mpc_new("number");
-  mpc_parser_t* Operator = mpc_new("operator");
-  mpc_parser_t* Expr = mpc_new("expr");
+  mpc_parser_t* Number    = mpc_new("number");
+  mpc_parser_t* Operator  = mpc_new("operator");
+  mpc_parser_t* Expr      = mpc_new("expr");
   mpc_parser_t* ShortLisp = mpc_new("shortlisp");
 
   // define rules
@@ -107,15 +181,17 @@ int main(int argc, char** argv)
     mpc_result_t r;
     if (mpc_parse("<stdin>", input, ShortLisp, &r))
     {
-      long result = eval(r.output);
-      printf("%li\n", result);
+      lval result = eval(r.output);
+      lval_println(result);
       mpc_ast_delete(r.output);
+
     } else {
       mpc_err_print(r.error);
       mpc_err_delete(r.error);
     }
 
     free(input);
+
   }
   
   // undefine and delete parsers
